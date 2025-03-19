@@ -17,7 +17,7 @@ import unittest
 
 from test.test_importlib import util as test_util
 
-from lazy_finder import _LazyFinder, _LazyLoader, _LazyModuleType, lazy_finder
+from lazy_find import _LazyFinder, _LazyLoader, _LazyModuleType, lazy_finder
 
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
@@ -58,6 +58,30 @@ else:  # pragma: <3.11 cover
                 return None
         else:
             return unittest.skipUnless(can_start_thread, msg)
+
+
+class CollectInit:
+    def __init__(self, *args: object, **kwargs: object):
+        self.args = args
+        self.kwargs = kwargs
+
+    def exec_module(self, module): ...
+
+
+class LazyLoaderFactoryTests(unittest.TestCase):
+    def test_init(self):
+        factory = _LazyLoader.factory(CollectInit)
+        # E.g. what importlib.machinery.FileFinder instantiates loaders with
+        # plus keyword arguments.
+        lazy_loader = factory("module name", "module path", kw="kw")
+        loader = lazy_loader.loader
+        self.assertEqual(("module name", "module path"), loader.args)
+        self.assertEqual({"kw": "kw"}, loader.kwargs)
+
+    def test_validation(self):
+        # No exec_module(), no lazy loading.
+        with self.assertRaises(TypeError):
+            _LazyLoader.factory(object)
 
 
 class TestingImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -251,10 +275,41 @@ sys.modules[__name__].__class__ = ImmutableModule
 
         module = self.new_module()
         self.assertIs(object.__getattribute__(module, "__class__"), _LazyModuleType)
+
         _ = module.__spec__
         self.assertIs(object.__getattribute__(module, "__class__"), _LazyModuleType)
+
         module.__spec__.name = "blahblahblah"
         self.assertIs(object.__getattribute__(module, "__class__"), _LazyModuleType)
+
+    @requires_working_threading()
+    def test_module_find_race(self):
+        mod_name = "inspect"
+        with test_util.uncache(mod_name):
+
+            class RaisingThread(threading.Thread):
+                exc = None
+
+                def run(self):
+                    try:
+                        super().run()
+                    except Exception as exc:  # pragma: no cover # noqa: BLE001
+                        self.exc = exc
+
+            def find_spec():
+                with lazy_finder:
+                    return importlib.util.find_spec(mod_name)
+
+            threads: list[RaisingThread] = []
+            for _ in range(10):
+                thread = RaisingThread(target=find_spec)
+                threads.append(thread)
+                thread.start()
+
+            # Races could cause errors
+            for thread in threads:
+                thread.join()
+                self.assertIsNone(thread.exc)
 
 
 class LazyFinderTests(unittest.TestCase):

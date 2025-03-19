@@ -1,6 +1,5 @@
 # A substantial portion of the code and comments below is adapted from
-# https://github.com/python/cpython/blob/49234c065cf2b1ea32c5a3976d834b1d07b9b831/Lib/importlib/util.py and
-# https://github.com/python/cpython/blob/49234c065cf2b1ea32c5a3976d834b1d07b9b831/Lib/importlib/_bootstrap.py
+# https://github.com/python/cpython/blob/49234c065cf2b1ea32c5a3976d834b1d07b9b831/Lib/importlib/util.py
 # with the original copyright being:
 # Copyright (c) 2001 Python Software Foundation; All Rights Reserved
 #
@@ -10,7 +9,6 @@
 
 from __future__ import annotations
 
-import _imp
 import _thread
 import sys as _sys
 import warnings as _warnings
@@ -37,85 +35,32 @@ else:
     _ModuleType = type(_sys)
 
 
+# importlib._bootstrap._find_spec is an implementation detail, but vendoring it is a bit much at this point.
+if TYPE_CHECKING:
+
+    def _find_spec(
+        name: str,
+        path: _t.Optional[_t.Sequence[str]],
+        target: _t.Optional[_ModuleType] = None,
+    ) -> _t.Optional[_ModuleSpec]: ...
+else:
+    from importlib._bootstrap import _find_spec
+
+
+if _sys.version_info >= (3, 11):  # pragma: >=3.11 cover
+    _Self = "_t.Self"
+elif TYPE_CHECKING:
+    from typing_extensions import Self as _Self
+else:  # pragma: <3.11 cover
+
+    class Self:
+        """Placeholder for typing.Self."""
+
+    _Self = Self
+    del Self
+
+
 __all__ = ("lazy_finder",)
-
-
-# ============================================================================
-# region -------- Adapted from importlib._bootstrap
-#
-# This avoids importing from a module that's an implementation detail.
-# `_imp` ends up being needed, but it's arguably less problematic.
-# ============================================================================
-
-
-class _ImportLockContext:
-    """Context manager for the import lock."""
-
-    def __enter__(self, /) -> None:
-        """Acquire the import lock."""
-
-        _imp.acquire_lock()
-
-    def __exit__(self, *_dont_care: object) -> None:
-        """Release the import lock regardless of any raised exceptions."""
-
-        _imp.release_lock()
-
-
-def _find_spec(
-    name: str,
-    path: _t.Optional[_t.Sequence[str]],
-    target: _t.Optional[_ModuleType] = None,
-) -> _t.Optional[_ModuleSpec]:  # pragma: no cover
-    """Find a module's spec."""
-
-    meta_path = _sys.meta_path
-    if meta_path is None:  # pyright: ignore [reportUnnecessaryComparison]
-        msg = "sys.meta_path is None, Python is likely shutting down"
-        raise ImportError(msg)
-
-    # gh-130094: Copy sys.meta_path so that we have a consistent view of the
-    # list while iterating over it.
-    meta_path = list(meta_path)
-    if not meta_path:
-        _warnings.warn("sys.meta_path is empty", ImportWarning)  # noqa: B028
-
-    # We check sys.modules here for the reload case.  While a passed-in
-    # target will usually indicate a reload there is no guarantee, whereas
-    # sys.modules provides one.
-    is_reload = name in _sys.modules
-    for finder in meta_path:
-        with _ImportLockContext():
-            try:
-                find_spec = finder.find_spec
-            except AttributeError:
-                continue
-            else:
-                spec = find_spec(name, path, target)
-
-        if spec is not None:
-            # The parent import may have already imported this module.
-            if not is_reload and name in _sys.modules:
-                module = _sys.modules[name]
-                try:
-                    __spec__ = module.__spec__
-                except AttributeError:
-                    # We use the found spec since that is the one that
-                    # we would have used if the parent module hadn't
-                    # beaten us to the punch.
-                    return spec
-                else:
-                    if __spec__ is None:
-                        return spec
-                    else:
-                        return __spec__
-            else:
-                return spec
-
-    return None
-
-
-# endregion
 
 
 # ============================================================================
@@ -123,12 +68,12 @@ def _find_spec(
 #
 # This allows a few invasive changes to the LazyLoader chain:
 #    1. Replace `threading` import with `_thread` to match which module
-#       importlib uses internally, and do it at the top level to avoid
-#       circular import issues.
-#    2. Special-casing `__spec__` in the lazy module type to avoid loading
+#       importlib._bootstrap uses internally, and do it at the top level to
+#       avoid circular import issues.
+#    2. Special-case `__spec__` in the lazy module type to avoid loading
 #       being unnecessarily triggered by internal importlib machinery.
-#    3. Avoiding importing `types`.
-#    4. Slightly adjusting method signatures.
+#    3. Avoid importing `types`.
+#    4. Slightly adjust method signatures to be more in line with object's.
 # ============================================================================
 
 
@@ -189,7 +134,8 @@ class _LazyModuleType(_ModuleType):
 
                 # If exec_module() was used directly there is no guarantee the module
                 # object was put into sys.modules.
-                if (original_mod := _sys.modules.get(original_name, None)) is not None and (self is not original_mod):
+                original_mod = _sys.modules.get(original_name, None)
+                if (original_mod is not None) and (self is not original_mod):
                     msg = f"module object for {original_name!r} substituted in sys.modules during a lazy load"
                     raise ValueError(msg)
 
@@ -217,10 +163,17 @@ class _LazyLoader(_Loader):
     """A loader that creates a module which defers loading until attribute access."""
 
     @staticmethod
-    def __check_eager_loader(loader: _Loader) -> None:
+    def __check_eager_loader(loader: _t.Union[_Loader, type[_Loader]]) -> None:
         if not hasattr(loader, "exec_module"):
             msg = "loader must define exec_module()"
             raise TypeError(msg)
+
+    @classmethod
+    def factory(cls, loader: type[_Loader]) -> _t.Callable[..., _Self]:
+        """Construct a callable which returns the eager loader made lazy."""
+
+        cls.__check_eager_loader(loader)
+        return lambda *args, **kwargs: cls(loader(*args, **kwargs))
 
     def __init__(self, loader: _Loader) -> None:
         self.__check_eager_loader(loader)
@@ -313,7 +266,7 @@ class _LazyFinderContext:
 lazy_finder: _t.Final[_LazyFinderContext] = _LazyFinderContext()
 
 
-# Support our type annotations valid at runtime.
+# Ensure our type annotations are valid at runtime.
 with lazy_finder:
     import typing as _t
 
