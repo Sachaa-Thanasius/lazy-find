@@ -1,0 +1,180 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lazy-finder"
+description = "A context manager for lazifying some kinds of imports."
+version = "1.0.0.dev0"
+requires-python = ">=3.9"
+readme = "README.rst"
+license = "MIT AND PSF-2.0"
+license-files = ["LICENSE*"]
+authors = [{ name = "Sachaa-Thanasius", email = "sachaathanasius@gmail.com" }]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/Sachaa-Thanasius/lazy-finder"
+
+[dependency-groups]
+dev = ["tox>=4.24.1"]
+test = ["pytest>=8"]
+cov = ["coverage>=7", "covdefaults"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lazy_finder"]
+
+
+# ---- Test config
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config"]
+
+[tool.coverage.run]
+plugins = ["covdefaults"]
+source = ["lazy_finder", "test_lazy_finder"]
+parallel = true
+
+[tool.coverage.paths]
+sly = ["src", "*/site-packages"]
+
+[tool.coverage.report]
+exclude_lines = ["^\\s*(el)?if TYPE_CHECKING:$"]
+
+
+# ---- Linter config
+
+[tool.ruff]
+include = ["src/lazy_finder/*.py"]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "A",
+    "ANN",
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "COM",
+    "DTZ",
+    "E",
+    "EM",
+    "ERA",
+    "F",
+    "FURB",
+    "G",
+    "I",
+    "ICN",
+    "INP",
+    "ISC",
+    "LOG",
+    "NPY",
+    "PD",
+    "PERF",
+    "PGH",
+    "PIE",
+    "PL",
+    "PT",
+    "PTH",
+    "PYI",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "SLOT",
+    "T10",
+    "T20",
+    "TC",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
+    # "FBT",
+]
+extend-ignore = [
+    # ---- General
+    "S101",    # Use of assert here is a known quantity for typing cases. All uses should be safe to optimize out.
+    "SIM105",  # Suppressable exception. contextlib.suppress is a stylistic choice with overhead.
+    "C90",     # McCabe complexity.
+    "ANN204",  # Special method return types are usually implicit and/or known by type checker.
+    "ANN401",  # Any is needed for some annotations.
+    "UP038",   # isinstance performs better with tuples than unions.
+    "PT001",   # pytest recommends against empty parentheses on pytest.fixture.
+    "TC001",   # Don't eagerly put things in TYPE_CHECKING blocks.
+    "TC002",   # Don't eagerly put things in TYPE_CHECKING blocks.
+    "TC003",   # Don't eagerly put things in TYPE_CHECKING blocks.
+    "PD011",   # Erroneous issue that triggers for any .values attribute access at all.
+    "PLR2004", # "Magic number" depends on the use case.
+    "RUF002",  # "Ambiguous character" depends on the use case.
+    "RUF003",  # "Ambiguous character" depends on the use case.
+    "RUF022",  # __all__ ordering can be meaningful.
+    "RUF023",  # __slots__ ordering can be meaningful. 
+
+    # ---- Recommended by Ruff when using Ruff format
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "E501",
+    "COM812",
+    "COM819",
+    "ISC001",
+    "ISC002",
+    "W293",   # Not recommended, but ruff format handles it as well.
+
+    # ---- Project-specific rules
+    # Readability
+    "RET505", # el(se|if) after return.
+    "RET506", # el(se|if) after raise.
+    "RET507", # el(se|if) after continue.
+    "RET508", # el(se|if) after break.
+]
+unfixable = [
+    "ERA", # Prevent unlikely erroneous deletion.
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+combine-as-imports = true
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = [
+    "T201",   # Printing.
+    "T203",   # Pretty-printing.
+    "ANN001", # Annotations for parameters.
+    "ANN201", # Annotations for public function returns.
+    "ANN202", # Annotations for private function returns.
+    "PT",     # Heavy usage of unittest-based tests.
+]
+
+# ---- Type-checker config
+
+[tool.pyright]
+include = ["src/lazy_finder"]
+ignore = ["tests", "test_*"]
+pythonVersion = "3.9"
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+
+defineConstant = { "TYPE_CHECKING" = true } # Just in case.
+
+reportPrivateUsage = "warning"                  # We're the library.
+reportUnnecessaryIsInstance = "information"     # Verify user input.
+reportUninitializedInstanceVariable = "warning" # Occasionally nice as a checkup, but otherwise noisy.
+reportCallInDefaultInitializer = "warning"
+reportImportCycles = "warning"                  # Occasionally not a false positive.
+reportPropertyTypeMismatch = "error"
+reportShadowedImports = "error"
+reportUnnecessaryTypeIgnoreComment = "warning"
