@@ -42,7 +42,7 @@ source = ["lazy_find", "test_lazy_find"]
 parallel = true
 
 [tool.coverage.paths]
-sly = ["src", "*/site-packages"]
+lazy_find = ["src", "*/site-packages"]
 
 [tool.coverage.report]
 exclude_lines = ["^\\s*(el)?if TYPE_CHECKING:$"]
@@ -132,11 +132,6 @@ extend-ignore = [
     "W293",   # Not recommended, but ruff format handles it as well.
 
     # ---- Project-specific rules
-    # Readability
-    "RET505", # el(se|if) after return.
-    "RET506", # el(se|if) after raise.
-    "RET507", # el(se|if) after continue.
-    "RET508", # el(se|if) after break.
 ]
 unfixable = [
     "ERA", # Prevent unlikely erroneous deletion.
@@ -158,6 +153,7 @@ keep-runtime-typing = true
     "ANN202", # Annotations for private function returns.
     "PT",     # Heavy usage of unittest-based tests.
 ]
+
 
 # ---- Type-checker config
 

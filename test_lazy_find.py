@@ -37,7 +37,7 @@ else:  # pragma: <3.11 cover
         """
         if sys.platform == "emscripten":
             return sys._emscripten_info.pthreads
-        elif sys.platform == "wasi":
+        elif sys.platform == "wasi":  # noqa: RET505
             return False
         else:
             # assume all other platforms have working thread support.
@@ -54,7 +54,7 @@ else:  # pragma: <3.11 cover
         if module:
             if not can_start_thread:
                 raise unittest.SkipTest(msg)
-            else:
+            else:  # noqa: RET506
                 return None
         else:
             return unittest.skipUnless(can_start_thread, msg)

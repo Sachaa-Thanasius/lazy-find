@@ -47,8 +47,9 @@ else:
     from importlib._bootstrap import _find_spec
 
 
+# Self is a helpful type annotation here, but its availability depends on version.
 if _sys.version_info >= (3, 11):  # pragma: >=3.11 cover
-    _Self = "_t.Self"
+    _Self: _t.TypeAlias = "_t.Self"
 elif TYPE_CHECKING:
     from typing_extensions import Self as _Self
 else:  # pragma: <3.11 cover
@@ -64,16 +65,21 @@ __all__ = ("lazy_finder",)
 
 
 # ============================================================================
-# region -------- Adapted from importlib.util
+# region -------- Module loader
 #
-# This allows a few invasive changes to the LazyLoader chain:
+# This code is adapted from importlib.util. Doing so allows a few invasive
+# changes to the LazyLoader chain:
+#
 #    1. Replace `threading` import with `_thread` to match which module
 #       importlib._bootstrap uses internally, and do it at the top level to
 #       avoid circular import issues.
+#        a. There's a chance this causes issues when this module is used in
+#           emscripten or wasi, but that needs testing.
 #    2. Special-case `__spec__` in the lazy module type to avoid loading
 #       being unnecessarily triggered by internal importlib machinery.
 #    3. Avoid importing `types`.
 #    4. Slightly adjust method signatures to be more in line with object's.
+#
 # ============================================================================
 
 
@@ -85,9 +91,9 @@ class _LazyModuleType(_ModuleType):
 
         __spec__: _ModuleSpec = object.__getattribute__(self, "__spec__")
 
-        # We want to avoid the importlib machinery unnecessarily causing a load
+        # NOTE: We want to avoid the importlib machinery unnecessarily causing a load
         # when it checks a lazy module in sys.modules to see if it is initialized.
-        # Since the machinery determines that via module.__spec__, return that without loading.
+        # Since the machinery determines that via an attribute on module.__spec__, return that without loading.
         #
         # This does mean a user can get __spec__ from a lazy module and modify it without causing a load. However,
         # for our use case, this should be good enough.
@@ -208,7 +214,7 @@ class _LazyLoader(_Loader):
 
 
 # ============================================================================
-# region -------- Original
+# region -------- Module finder
 # ============================================================================
 
 
