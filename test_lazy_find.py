@@ -336,26 +336,26 @@ class LazyFinderTests(unittest.TestCase):
             sys.meta_path.remove(_LazyFinder)
 
     def test_e2e(self):
-        with test_util.uncache("typing"):
+        with test_util.uncache("inspect"):
             # Lazily imported.
             with lazy_finder:
-                import typing
-            self.assertIs(object.__getattribute__(typing, "__class__"), _LazyModuleType)
+                import inspect
+            self.assertIs(object.__getattribute__(inspect, "__class__"), _LazyModuleType)
 
             # When lazily imported again, still unloaded.
             with lazy_finder:
-                import typing
-            self.assertIs(object.__getattribute__(typing, "__class__"), _LazyModuleType)
+                import inspect
+            self.assertIs(object.__getattribute__(inspect, "__class__"), _LazyModuleType)
 
             # When regularly imported but untouched, still unloaded.
-            import typing
+            import inspect
 
-            self.assertIs(object.__getattribute__(typing, "__class__"), _LazyModuleType)
+            self.assertIs(object.__getattribute__(inspect, "__class__"), _LazyModuleType)
 
             # Only on accessing a variable is it loaded.
-            _ = typing.Any
+            _ = inspect.signature
 
-            self.assertIs(object.__getattribute__(typing, "__class__"), types.ModuleType)
+            self.assertIs(object.__getattribute__(inspect, "__class__"), types.ModuleType)
 
 
 if __name__ == "__main__":

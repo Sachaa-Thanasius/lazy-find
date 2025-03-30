@@ -1,5 +1,6 @@
 # A substantial portion of the code and comments below is adapted from
 # https://github.com/python/cpython/blob/49234c065cf2b1ea32c5a3976d834b1d07b9b831/Lib/importlib/util.py
+# and https://github.com/python/cpython/blob/49234c065cf2b1ea32c5a3976d834b1d07b9b831/Lib/importlib/_bootstrap.py
 # with the original copyright being:
 # Copyright (c) 2001 Python Software Foundation; All Rights Reserved
 #
@@ -9,8 +10,9 @@
 
 from __future__ import annotations
 
-import _thread
+import _imp
 import sys as _sys
+import threading as _threading
 import warnings as _warnings
 from importlib.machinery import ModuleSpec as _ModuleSpec, SourceFileLoader as _SourceFileLoader
 
@@ -28,23 +30,11 @@ else:
         from importlib.abc import Loader as _Loader
 
 
-# types provides more than we need but is better understood by type-checkers.
+# ModuleType is needed at import time, but types provides more than we need.
 if TYPE_CHECKING:
     from types import ModuleType as _ModuleType
 else:
     _ModuleType = type(_sys)
-
-
-# importlib._bootstrap._find_spec is an implementation detail, but vendoring it is a bit much at this point.
-if TYPE_CHECKING:
-
-    def _find_spec(
-        name: str,
-        path: _t.Optional[_t.Sequence[str]],
-        target: _t.Optional[_ModuleType] = None,
-    ) -> _t.Optional[_ModuleSpec]: ...
-else:
-    from importlib._bootstrap import _find_spec
 
 
 # Self is a helpful type annotation here, but its availability depends on version.
@@ -65,19 +55,17 @@ __all__ = ("lazy_finder",)
 
 
 # ============================================================================
-# region -------- Module loader
+# region -------- Module loader --------
 #
 # This code is adapted from importlib.util. Doing so allows a few invasive
 # changes to the LazyLoader chain:
 #
-#    1. Replace `threading` import with `_thread` to match which module
-#       importlib._bootstrap uses internally, and do it at the top level to
-#       avoid circular import issues.
+#    1. Move threading import to the top level to avoid circular import issues.
 #        a. There's a chance this causes issues when this module is used in
 #           emscripten or wasi, but that needs testing.
-#    2. Special-case `__spec__` in the lazy module type to avoid loading
+#    2. Special-case __spec__ in the lazy module type to avoid loading
 #       being unnecessarily triggered by internal importlib machinery.
-#    3. Avoid importing `types`.
+#    3. Avoid importing types.
 #    4. Slightly adjust method signatures to be more in line with object's.
 #
 # ============================================================================
@@ -92,11 +80,26 @@ class _LazyModuleType(_ModuleType):
         __spec__: _ModuleSpec = object.__getattribute__(self, "__spec__")
 
         # NOTE: We want to avoid the importlib machinery unnecessarily causing a load
-        # when it checks a lazy module in sys.modules to see if it is initialized.
-        # Since the machinery determines that via an attribute on module.__spec__, return that without loading.
+        # when it checks a lazy module in sys.modules to see if it is initialized
+        # (The relevant code is in importlib._bootstrap._find_and_load()). Since the machinery determines that
+        # via an attribute on module.__spec__, return the spec without loading.
         #
-        # This does mean a user can get __spec__ from a lazy module and modify it without causing a load. However,
-        # for our use case, this should be good enough.
+        # This does mean a user can get __spec__ from a lazy module and modify it without causing a load.
+        # Beware: the consequences are unknown.
+        #
+        # Extra notes
+        # -----------
+        # I would further restrict this to only work when importlib internals request __spec__, but I don't know how.
+        # I attempted the following:
+        #
+        # 1. Stack frame examination via:
+        #    - sys._getframemodulename
+        #    - sys._getframe
+        #    - traceback.tb_frame.f_back...
+        #    - None of the above could even see a frame where __spec__ is requested by
+        #      importlib._bootstrap._find_and_load().
+        # 2. Is there even another way?
+
         if name == "__spec__":
             return __spec__
 
@@ -203,7 +206,7 @@ class _LazyLoader(_Loader):
         loader_state = {
             "__dict__": module.__dict__.copy(),
             "__class__": module.__class__,
-            "lock": _thread.RLock(),
+            "lock": _threading.RLock(),
             "is_loading": False,
         }
         module.__spec__.loader_state = loader_state
@@ -214,13 +217,83 @@ class _LazyLoader(_Loader):
 
 
 # ============================================================================
-# region -------- Module finder
+# region -------- Module finder --------
+#
+# Some of this code, specifically _ImportLockContext and _find_spec(), was
+# adapted from importlib._bootstrap.
 # ============================================================================
 
 
-# XXX: Should we use a global thread rlock to guard our modifications of sys.meta_path?
-# It won't help if others modify the meta path, but it'll prevent our code from data racing
-# itself. In theory.
+class _ImportLockContext:
+    """Context manager for the import lock."""
+
+    def __enter__(self, /) -> None:
+        """Acquire the import lock."""
+
+        _imp.acquire_lock()
+
+    def __exit__(self, *_dont_care: object) -> None:
+        """Release the import lock regardless of any raised exceptions."""
+
+        _imp.release_lock()
+
+
+def _find_spec(
+    name: str,
+    path: _t.Optional[_t.Sequence[str]],
+    target: _t.Optional[_ModuleType] = None,
+) -> _t.Optional[_ModuleSpec]:  # pragma: no cover
+    """Find a module's spec."""
+
+    meta_path = _sys.meta_path
+    if meta_path is None:  # pyright: ignore [reportUnnecessaryComparison]
+        # PyImport_Cleanup() is running or has been called.
+        msg = "sys.meta_path is None, Python is likely shutting down"
+        raise ImportError(msg)
+
+    # gh-130094: Copy sys.meta_path so that we have a consistent view of the
+    # list while iterating over it.
+    meta_path = list(meta_path)
+    if not meta_path:
+        _warnings.warn("sys.meta_path is empty", ImportWarning)  # noqa: B028
+
+    # We check sys.modules here for the reload case.  While a passed-in
+    # target will usually indicate a reload there is no guarantee, whereas
+    # sys.modules provides one.
+    is_reload = name in _sys.modules
+    for finder in meta_path:
+        with _ImportLockContext():
+            try:
+                find_spec = finder.find_spec
+            except AttributeError:
+                continue
+            else:
+                spec = find_spec(name, path, target)
+
+        if spec is not None:
+            # The parent import may have already imported this module.
+            if not is_reload and name in _sys.modules:
+                module = _sys.modules[name]
+                try:
+                    __spec__ = module.__spec__
+                except AttributeError:
+                    # We use the found spec since that is the one that
+                    # we would have used if the parent module hadn't
+                    # beaten us to the punch.
+                    return spec
+                else:
+                    if __spec__ is None:
+                        return spec
+                    else:  # noqa: RET505
+                        return __spec__
+            else:
+                return spec
+
+    return None
+
+
+#: A lock for preventing our code from data-racing itself when modifying sys.meta_path within _LazyFinder.
+_lazy_finder_lock = _threading.RLock()
 
 
 class _LazyFinder:
@@ -233,29 +306,30 @@ class _LazyFinder:
         path: _t.Optional[_t.Sequence[str]] = None,
         target: _t.Optional[_ModuleType] = None,
     ) -> _t.Optional[_ModuleSpec]:
-        in_meta_path = cls in _sys.meta_path
+        with _lazy_finder_lock:
+            in_meta_path = cls in _sys.meta_path
 
-        if in_meta_path:
-            _sys.meta_path.remove(cls)
-
-        try:
-            spec = _find_spec(name, path, target)
-
-            # Skip being lazy for non-source modules to avoid issues with extension modules having
-            # uninitialized state, especially when loading can't currently be triggered by PyModule_GetState.
-            # Ref: https://github.com/python/cpython/issues/85963
-            if (spec is not None) and isinstance(spec.loader, _SourceFileLoader):
-                spec.loader = _LazyLoader(spec.loader)
-
-            return spec
-
-        finally:
             if in_meta_path:
-                _sys.meta_path.insert(0, cls)
+                _sys.meta_path.remove(cls)
+
+            try:
+                spec = _find_spec(name, path, target)
+
+                # Skip being lazy for non-source modules to avoid issues with extension modules having
+                # uninitialized state, especially when loading can't currently be triggered by PyModule_GetState.
+                # Ref: https://github.com/python/cpython/issues/85963
+                if (spec is not None) and isinstance(spec.loader, _SourceFileLoader):
+                    spec.loader = _LazyLoader(spec.loader)
+
+                return spec
+
+            finally:
+                if in_meta_path:
+                    _sys.meta_path.insert(0, cls)
 
 
 class _LazyFinderContext:
-    """A context manager that temporarily lazifies contained imports (if the modules are written in Python)."""
+    """The type of `lazy_finder`. Should not be manually constructed."""
 
     __slots__ = ()
 
@@ -270,6 +344,15 @@ class _LazyFinderContext:
 
 
 lazy_finder: _t.Final[_LazyFinderContext] = _LazyFinderContext()
+"""A context manager that temporarily lazifies some kinds of import statements in its context.
+
+Caveats include:
+
+-   The modules being imported must be written in pure Python.
+-   ``from`` imports will be evaluated eagerly.
+-   In a nested import such as ``import a.b.c``, only ``c`` will be lazily imported.
+    ``a`` and ``a.b`` will be eagerly imported. This may change in the future.
+"""
 
 
 # Ensure our type annotations are valid at runtime.
