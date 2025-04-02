@@ -17,7 +17,7 @@ import unittest
 
 from test.test_importlib import util as test_util
 
-from lazy_find import _LazyFinder, _LazyLoader, _LazyModuleType, lazy_finder
+from lazy_find import _LazyFinder, _LazyLoader, _LazyModuleType, finder
 
 
 if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
@@ -297,7 +297,7 @@ sys.modules[__name__].__class__ = ImmutableModule
                         self.exc = exc
 
             def find_spec():
-                with lazy_finder:
+                with finder:
                     return importlib.util.find_spec(mod_name)
 
             threads: list[RaisingThread] = []
@@ -329,7 +329,7 @@ class LazyFinderTests(unittest.TestCase):
         with (
             test_util.uncache("inspect"),
             self.assertWarns(ImportWarning, msg="_LazyFinder unexpectedly missing from sys.meta_path"),
-            lazy_finder,
+            finder,
         ):
             import inspect  # noqa: F401
 
@@ -338,12 +338,12 @@ class LazyFinderTests(unittest.TestCase):
     def test_e2e(self):
         with test_util.uncache("inspect"):
             # Lazily imported.
-            with lazy_finder:
+            with finder:
                 import inspect
             self.assertIs(object.__getattribute__(inspect, "__class__"), _LazyModuleType)
 
             # When lazily imported again, still unloaded.
-            with lazy_finder:
+            with finder:
                 import inspect
             self.assertIs(object.__getattribute__(inspect, "__class__"), _LazyModuleType)
 

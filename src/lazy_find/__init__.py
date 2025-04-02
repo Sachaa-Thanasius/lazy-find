@@ -17,11 +17,18 @@ import warnings as _warnings
 from importlib.machinery import ModuleSpec as _ModuleSpec, SourceFileLoader as _SourceFileLoader
 
 
+# ============================================================================
+# region -------- Annotation-related compatibility shims --------
+# ============================================================================
+
+
 TYPE_CHECKING = False
 
 
-# importlib.abc.Loader changed location in 3.10+ to become cheaper to import.
-if TYPE_CHECKING:
+# importlib.abc.Loader changed location in 3.10+ to become cheaper to import,
+# but importlib.abc became cheap again in 3.14.
+# PYUPDATE: py3.14 - Just import from importlib.abc directly.
+if TYPE_CHECKING or _sys.version_info >= (3, 14):  # pragma: >=3.14 cover
     from importlib.abc import Loader as _Loader
 else:
     try:  # pragma: >=3.10 cover
@@ -38,6 +45,7 @@ else:
 
 
 # Self is a helpful type annotation here, but its availability depends on version.
+# PYUPDATE: py3.11 - Just use _t.Self directly.
 if _sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     _Self: _t.TypeAlias = "_t.Self"
 elif TYPE_CHECKING:
@@ -51,7 +59,10 @@ else:  # pragma: <3.11 cover
     del Self
 
 
-__all__ = ("lazy_finder",)
+# endregion
+
+
+__all__ = ("finder",)
 
 
 # ============================================================================
@@ -60,14 +71,18 @@ __all__ = ("lazy_finder",)
 # This code is adapted from importlib.util. Doing so allows a few invasive
 # changes to the LazyLoader chain:
 #
-#    1. Move threading import to the top level to avoid circular import issues.
-#        a. There's a chance this causes issues when this module is used in
-#           emscripten or wasi, but that needs testing.
-#    2. Special-case __spec__ in the lazy module type to avoid loading
-#       being unnecessarily triggered by internal importlib machinery.
-#    3. Avoid importing types.
-#    4. Slightly adjust method signatures to be more in line with object's.
-#
+# 1. Move threading import to the top level to avoid circular import
+#    issues.
+#     a. This may cause issues when this module is used in
+#        emscripten or wasi.
+#        TODO: Test this.
+#     b. This may cause issues when this module is used with gevent.
+#        TODO: Test this.
+# 2. Special-case __spec__ in the lazy module type to avoid loading
+#    being unnecessarily triggered by internal importlib machinery.
+# 3. Avoid importing types.
+# 4. Slightly adjust method signatures to be more in line with object's.
+# 5. Make other slight personalizations.
 # ============================================================================
 
 
@@ -93,13 +108,13 @@ class _LazyModuleType(_ModuleType):
         # I attempted the following:
         #
         # 1. Stack frame examination via:
-        #    - sys._getframemodulename
-        #    - sys._getframe
-        #    - traceback.tb_frame.f_back...
-        #    - None of the above could even see a frame where __spec__ is requested by
-        #      importlib._bootstrap._find_and_load().
+        #     - sys._getframemodulename
+        #     - sys._getframe
+        #     - traceback.tb_frame.f_back...
+        #    Unfortunately, none of the above could even see a frame where __spec__ is requested by
+        #    importlib._bootstrap._find_and_load(); the import statement somehow directly requests it?
+        #    My guess is that bytecode shenanigans are involved.
         # 2. Is there even another way?
-
         if name == "__spec__":
             return __spec__
 
@@ -219,8 +234,11 @@ class _LazyLoader(_Loader):
 # ============================================================================
 # region -------- Module finder --------
 #
-# Some of this code, specifically _ImportLockContext and _find_spec(), was
-# adapted from importlib._bootstrap.
+# Some of this code, specifically _ImportLockContext and
+# _find_spec_without_lazyfinder(), was adapted from importlib._bootstrap.
+# Doing so avoids depending on private unstable APIs, allows backporting of
+# bugfixes, and allows us to reuse the code from _find_spec to find specs
+# while ignoring _LazyFinder in sys.meta_path.
 # ============================================================================
 
 
@@ -238,12 +256,15 @@ class _ImportLockContext:
         _imp.release_lock()
 
 
-def _find_spec(
+def _find_spec_without_lazyfinder(  # noqa: PLR0912
     name: str,
     path: _t.Optional[_t.Sequence[str]],
     target: _t.Optional[_ModuleType] = None,
 ) -> _t.Optional[_ModuleSpec]:  # pragma: no cover
-    """Find a module's spec."""
+    """Find a module's spec.
+
+    Ignore the presence of `_LazyFinder` on `sys.meta_path`.
+    """
 
     meta_path = _sys.meta_path
     if meta_path is None:  # pyright: ignore [reportUnnecessaryComparison]
@@ -262,6 +283,10 @@ def _find_spec(
     # sys.modules provides one.
     is_reload = name in _sys.modules
     for finder in meta_path:
+        # NOTE: This is our patch to _find_spec; just skip _LazyFinder.
+        if finder is _LazyFinder:
+            continue
+
         with _ImportLockContext():
             try:
                 find_spec = finder.find_spec
@@ -292,10 +317,6 @@ def _find_spec(
     return None
 
 
-#: A lock for preventing our code from data-racing itself when modifying sys.meta_path within _LazyFinder.
-_lazy_finder_lock = _threading.RLock()
-
-
 class _LazyFinder:
     """A finder that wraps loaders for source modules with `_LazyLoader`."""
 
@@ -306,57 +327,54 @@ class _LazyFinder:
         path: _t.Optional[_t.Sequence[str]] = None,
         target: _t.Optional[_ModuleType] = None,
     ) -> _t.Optional[_ModuleSpec]:
-        with _lazy_finder_lock:
-            in_meta_path = cls in _sys.meta_path
+        spec = _find_spec_without_lazyfinder(name, path, target)
 
-            if in_meta_path:
-                _sys.meta_path.remove(cls)
+        # Skip being lazy for non-source modules to avoid issues with extension modules having
+        # uninitialized state, especially when loading can't currently be triggered by PyModule_GetState.
+        # Ref: https://github.com/python/cpython/issues/85963
+        if (spec is not None) and isinstance(spec.loader, _SourceFileLoader):
+            spec.loader = _LazyLoader(spec.loader)
 
-            try:
-                spec = _find_spec(name, path, target)
+        return spec
 
-                # Skip being lazy for non-source modules to avoid issues with extension modules having
-                # uninitialized state, especially when loading can't currently be triggered by PyModule_GetState.
-                # Ref: https://github.com/python/cpython/issues/85963
-                if (spec is not None) and isinstance(spec.loader, _SourceFileLoader):
-                    spec.loader = _LazyLoader(spec.loader)
 
-                return spec
-
-            finally:
-                if in_meta_path:
-                    _sys.meta_path.insert(0, cls)
+#: A lock for preventing our code from data-racing itself when modifying sys.meta_path.
+_meta_path_lock = _threading.RLock()
 
 
 class _LazyFinderContext:
-    """The type of `lazy_finder`. Should not be manually constructed."""
-
-    __slots__ = ()
+    """The type of `lazy_find.finder`. Should not be manually constructed."""
 
     def __enter__(self, /) -> None:
-        _sys.meta_path.insert(0, _LazyFinder)
+        with _meta_path_lock:
+            _sys.meta_path.insert(0, _LazyFinder)
 
     def __exit__(self, *_dont_care: object) -> None:
         try:
-            _sys.meta_path.remove(_LazyFinder)
+            with _meta_path_lock:
+                _sys.meta_path.remove(_LazyFinder)
         except ValueError:
             _warnings.warn("_LazyFinder unexpectedly missing from sys.meta_path", ImportWarning, stacklevel=2)
 
 
-lazy_finder: _t.Final[_LazyFinderContext] = _LazyFinderContext()
-"""A context manager that temporarily lazifies some kinds of import statements in its context.
+finder: _t.Final[_LazyFinderContext] = _LazyFinderContext()
+"""A context manager within which some imports will occur "lazily".
 
-Caveats include:
+The modules being imported must be written in pure Python. Anything else will be imported eagerly.
 
--   The modules being imported must be written in pure Python.
--   ``from`` imports will be evaluated eagerly.
--   In a nested import such as ``import a.b.c``, only ``c`` will be lazily imported.
-    ``a`` and ``a.b`` will be eagerly imported. This may change in the future.
+``from`` imports may be evaluated eagerly.
+
+In a nested import such as ``import a.b.c``, only ``c`` will be lazily imported.
+``a`` and ``a.b`` will be eagerly imported. This may change in the future.
+
+Modules with import side effects might not cooperate with this.
+For instance, `collections` puts `collections.abc` in `sys.modules` in an unusual way at import time,
+meaning lazy-loading `collections.abc` will just break.
 """
 
 
 # Ensure our type annotations are valid at runtime.
-with lazy_finder:
+with finder:
     import typing as _t
 
 
