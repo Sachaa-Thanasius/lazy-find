@@ -46,10 +46,10 @@ else:
 
 # Self is a helpful type annotation here, but its availability depends on version.
 # PYUPDATE: py3.11 - Just use _t.Self directly.
-if _sys.version_info >= (3, 11):  # pragma: >=3.11 cover
-    _Self: _t.TypeAlias = "_t.Self"
-elif TYPE_CHECKING:
+if TYPE_CHECKING:
     from typing_extensions import Self as _Self
+elif _sys.version_info >= (3, 11):  # pragma: >=3.11 cover
+    _Self: _t.TypeAlias = "_t.Self"
 else:  # pragma: <3.11 cover
 
     class Self:

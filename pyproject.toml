@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["flit_core >=3.12,<4"]
+build-backend = "flit_core.buildapi"
 
 [project]
 name = "lazy-find"
@@ -16,8 +16,10 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Typing :: Typed",
 ]
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/Sachaa-Thanasius/lazy-find"
@@ -27,11 +29,11 @@ dev = ["tox>=4.24.1"]
 test = ["pytest>=8"]
 cov = ["coverage>=7", "covdefaults"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/lazy_find"]
+[tool.flit.sdist]
+include = ["tests/"]
 
 
-# ---- Test config
+# -------- Test config --------
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config"]
@@ -48,7 +50,7 @@ lazy_find = ["src", "*/site-packages"]
 exclude_lines = ["^\\s*(el)?if TYPE_CHECKING:$"]
 
 
-# ---- Linter config
+# -------- Linter config --------
 
 [tool.ruff]
 include = ["src/lazy_find/*.py"]
@@ -130,8 +132,6 @@ extend-ignore = [
     "ISC001",
     "ISC002",
     "W293",   # Not recommended, but ruff format handles it as well.
-
-    # ---- Project-specific rules
 ]
 unfixable = [
     "ERA", # Prevent unlikely erroneous deletion.
@@ -145,7 +145,7 @@ combine-as-imports = true
 keep-runtime-typing = true
 
 [tool.ruff.lint.per-file-ignores]
-"test_*.py" = [
+"tests/test_*.py" = [
     "T201",   # Printing.
     "T203",   # Pretty-printing.
     "ANN001", # Annotations for parameters.
@@ -155,11 +155,11 @@ keep-runtime-typing = true
 ]
 
 
-# ---- Type-checker config
+# -------- Type-checker config --------
 
 [tool.pyright]
 include = ["src/lazy_find"]
-ignore = ["tests", "test_*"]
+ignore = ["tests"]
 pythonVersion = "3.9"
 pythonPlatform = "All"
 typeCheckingMode = "strict"
