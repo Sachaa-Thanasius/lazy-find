@@ -5,18 +5,21 @@ build-backend = "flit_core.buildapi"
 [project]
 name = "lazy-find"
 description = "A context manager for lazifying some kinds of imports."
-version = "1.0.1.dev0"
+version = "2.0.0rc1"
 requires-python = ">=3.9"
 readme = "README.rst"
 license = "MIT AND PSF-2.0"
 license-files = ["LICENSE*"]
 authors = [{ name = "Sachaa-Thanasius", email = "sachaathanasius@gmail.com" }]
 classifiers = [
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
     "Typing :: Typed",
 ]
 dependencies = []
@@ -40,7 +43,7 @@ addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config"]
 
 [tool.coverage.run]
 plugins = ["covdefaults"]
-source = ["lazy_find", "test_lazy_find"]
+source = ["lazy_find", "tests"]
 parallel = true
 
 [tool.coverage.paths]
